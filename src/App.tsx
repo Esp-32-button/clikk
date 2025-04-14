@@ -5,13 +5,16 @@ import LoginForm from './components/LoginForm';
 import ProductSection from './components/ProductSection';
 import ControlPanel from './components/ControlPanel';
 
+
+
 function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [showLoginForm, setShowLoginForm] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
-
+  
+  
   useEffect(() => {
     const savedEmail = Cookies.get('userEmail');
     if (savedEmail) {
@@ -74,9 +77,12 @@ function App() {
           <div className="flex justify-between h-20">
             <div className="flex items-center">
               <Power className="h-8 w-8 text-blue-600" />
-              <span className="ml-3 text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 text-transparent bg-clip-text">
-                ClikK
-              </span>
+              <button
+      onClick={() => navigate('/product-section')} // Direct navigation on click
+      className="ml-3 text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 text-transparent bg-clip-text"
+    >
+      ClikK
+    </button>
             </div>
 
             <div className="hidden md:flex items-center space-x-8">

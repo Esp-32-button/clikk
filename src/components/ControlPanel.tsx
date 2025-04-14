@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Menu, X, Power, Loader2, Unlink, AlertTriangle, Activity, Clock, Settings2, Plus, ArrowRight } from 'lucide-react';
+import { Menu, X, Power, Loader2, Unlink, AlertTriangle, Activity, Clock, Settings2, Plus, ArrowRight, RefreshCw } from 'lucide-react';
 
 interface ControlPanelProps {
   userId: string;
@@ -11,6 +11,8 @@ interface Pair {
   email: string;
   paired_device: string | string[] | null;
   device_name?: string;
+  reversed?: string | null;
+  angle?: number;
 }
 
 const ControlPanel: React.FC<ControlPanelProps> = ({ userId, userEmail }) => {
@@ -30,60 +32,83 @@ const ControlPanel: React.FC<ControlPanelProps> = ({ userId, userEmail }) => {
 
   const fetchPairs = async () => {
     try {
-      const response = await fetch(
-        `https://pp-kcfa.onrender.com/get-devices?email=${encodeURIComponent(userEmail)}`
-      );
-  
+      setIsLoading(true);
+      // Add cache-buster to prevent stale data
+      const url = `https://pp-kcfa.onrender.com/get-devices?email=${encodeURIComponent(userEmail)}&_=${Date.now()}`;
+      
+      const response = await fetch(url);
+      
       if (!response.ok) {
-        throw new Error('Failed to fetch paired devices');
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
   
       const data = await response.json();
-      console.log('Raw API response:', data); // Debug log
+      console.log('Raw API response:', data);
+
+      // Enhanced empty response handling
+      const isEmptyResponse = 
+        !data ||
+        (Array.isArray(data) && data.length === 0) ||
+        (data.pairs && Array.isArray(data.pairs) && data.pairs.length === 0) ||
+        (typeof data === 'object' && Object.keys(data).length === 0);
   
-      // Normalize the response to always be an array of pairs
-      let pairsList: Pair[] = [];
-  
-      if (Array.isArray(data)) {
-        pairsList = data.flatMap((item) => {
-          const devices = Array.isArray(item.paired_device) ? item.paired_device : [item.paired_device];
-          return devices.map((device) => ({
-            id: item.id || device,
-            email: item.email || userEmail,
-            paired_device: device,
-            device_name: item.device_name || null, // Add device_name handling
-          }));
-        });
-      } else if (data.pairs && Array.isArray(data.pairs)) {
-        pairsList = data.pairs.flatMap((item) => {
-          const devices = Array.isArray(item.paired_device) ? item.paired_device : [item.paired_device];
-          return devices.map((device) => ({
-            id: item.id || device,
-            email: item.email || userEmail,
-            paired_device: device,
-            device_name: item.device_name || null, // Add device_name handling
-          }));
-        });
-      } else if (data && typeof data === 'object' && data.paired_device) {
-        const devices = Array.isArray(data.paired_device) ? data.paired_device : [data.paired_device];
-        pairsList = devices.map((device) => ({
-          id: data.id || device,
-          email: data.email || userEmail,
-          paired_device: device,
-          device_name: data.device_name || null, // Add device_name handling
-        }));
+      if (isEmptyResponse) {
+        console.log('Empty response detected');
+        setPairs([]);
+        setError(null);
+        return;
       }
   
-      console.log('Processed pairs list:', pairsList); // Debug log
+      // Unified normalization process
+      const normalizeItem = (item: any): Pair[] => {
+        if (!item) return [];
+        
+        const devices = item.paired_device 
+          ? Array.isArray(item.paired_device)
+            ? item.paired_device
+            : [item.paired_device]
+          : [];
   
-      pairsList = pairsList.filter(pair => pair && pair.paired_device);
+        return devices.map(device => ({
+          id: item.id || device.toString(),
+          email: item.email || userEmail,
+          paired_device: device,
+          device_name: item.device_name || `Device ${device}`,
+          reversed: item.reversed || 'no',
+          angle: item.angle || 90
+        }));
+      };
   
-      console.log('Processed pairs list:', pairsList);
-      setPairs(pairsList);
+      let pairsList: Pair[] = [];
+  
+      // Handle different response structures
+      if (Array.isArray(data)) {
+        pairsList = data.flatMap(normalizeItem);
+      } else if (data.pairs && Array.isArray(data.pairs)) {
+        pairsList = data.pairs.flatMap(normalizeItem);
+      } else if (data.paired_device) {
+        pairsList = normalizeItem(data);
+      } else {
+        console.warn('Unexpected response structure:', data);
+        setPairs([]);
+        return;
+      }
+  
+      // Strict filtering
+      const validPairs = pairsList.filter(pair => 
+        pair?.paired_device && 
+        typeof pair.paired_device === 'string' && 
+        pair.paired_device.trim() !== ''
+      );
+  
+      console.log('Valid pairs:', validPairs);
+      setPairs(validPairs);
       setError(null);
+  
     } catch (error) {
-      console.error('Error fetching pairs:', error);
-      setError('Failed to load paired devices. Please try again.');
+      console.error('Fetch error:', error);
+      setError('Failed to load devices. Please try again.');
+      setPairs([]); // Ensure empty state on error
     } finally {
       setIsLoading(false);
     }
@@ -223,14 +248,16 @@ const ControlPanel: React.FC<ControlPanelProps> = ({ userId, userEmail }) => {
           </div>
         ) : (
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-            {pairs.map((pair, index) => (
-              <DeviceCard 
-                key={pair.id || `device-${index}`} 
-                pair={pair} 
-                onUnpair={fetchPairs}
-                userEmail={userEmail} 
-              />
-            ))}
+            {pairs.map((pair) => (
+  <DeviceCard
+    key={pair.id}
+    pair={pair}
+    userEmail={userEmail}
+    onUnpair={fetchPairs}
+    setPairs={setPairs}
+  />
+))}
+            
           </div>
         )}
 
@@ -319,9 +346,10 @@ interface DeviceCardProps {
   pair: Pair;
   onUnpair: () => void;
   userEmail: string;
+  setPairs: React.Dispatch<React.SetStateAction<Pair[]>>;
 }
 
-const DeviceCard: React.FC<DeviceCardProps> = ({ pair, onUnpair , userEmail}) => {
+const DeviceCard: React.FC<DeviceCardProps> = ({ pair, onUnpair , userEmail, setPairs }) => {
   const [isOn, setIsOn] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isUnpairing, setIsUnpairing] = useState(false);
@@ -333,6 +361,9 @@ const DeviceCard: React.FC<DeviceCardProps> = ({ pair, onUnpair , userEmail}) =>
   );
   const [isSavingName, setIsSavingName] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
+
+  const [currentAngle, setCurrentAngle] = useState(pair.angle || 90);
+  const [isUpdatingAngle, setIsUpdatingAngle] = useState(false);
 
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [hours, setHours] = useState('00');
@@ -419,6 +450,35 @@ const DeviceCard: React.FC<DeviceCardProps> = ({ pair, onUnpair , userEmail}) =>
     }
   };
 
+  const handleAngleChange = async (newAngle: number) => {
+    setIsUpdatingAngle(true);
+    try {
+      const response = await fetch('https://pp-kcfa.onrender.com/set-angle', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          pairingCode: pair.paired_device,
+          mode: newAngle,
+          email:userEmail
+        })
+      });
+
+      if (!response.ok) throw new Error('Failed to update angle');
+      
+      setCurrentAngle(newAngle);
+      onUnpair(); // Refresh pairs list
+    } catch (error) {
+      console.error('Error updating angle:', error);
+      alert('Failed to update angle. Please try again.');
+    } finally {
+      setIsUpdatingAngle(false);
+    }
+  };
+  const angleOptions = [1, 2, 3, 4, 5];
+
+
   useEffect(() => {
     if (pair.paired_device) {
       const fetchServoState = async () => {
@@ -450,25 +510,54 @@ const DeviceCard: React.FC<DeviceCardProps> = ({ pair, onUnpair , userEmail}) =>
     }
   }, [pair.paired_device]);
 
+  const handleReverse = async () => {
+    try {
+      const newReversed = pair.reversed === 'yes' ? 'no' : 'yes';
+      
+      const response = await fetch('https://pp-kcfa.onrender.com/update-reverse', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          pairingCode: pair.paired_device,
+          reversed: newReversed,
+          email:userEmail 
+        })
+      });
+  
+      if (!response.ok) throw new Error('Failed to update reverse state');
+      
+      // Refresh the pairs list to get updated state
+      onUnpair();
+    } catch (error) {
+      console.error('Error reversing state:', error);
+      alert('Failed to update reverse state. Please try again.');
+    }
+  };
+
+
   const handleToggle = async () => {
     setIsLoading(true);
     try {
+      const actualState = pair.reversed === 'yes' ? !isOn : isOn;
+      
       const response = await fetch('https://pp-kcfa.onrender.com/servo', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          state: !isOn ? 'ON' : 'OFF',
-          pairingCode: pair.paired_device
+          state: actualState ? 'OFF' : 'ON', // Invert if reversed
+          pairingCode: pair.paired_device,
+          
         })
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to toggle servo');
-      }
-
-      setIsOn(!isOn);
+  
+      if (!response.ok) throw new Error('Failed to toggle servo');
+      
+      // Update local state based on reversed flag
+      setIsOn(prev => !prev);
     } catch (error) {
       console.error('Error toggling servo:', error);
       alert('Failed to toggle device. Please try again.');
@@ -478,32 +567,46 @@ const DeviceCard: React.FC<DeviceCardProps> = ({ pair, onUnpair , userEmail}) =>
   };
 
   const handleUnpair = async () => {
-    if (!window.confirm('Are you sure you want to unpair this device?')) {
-      return;
-    }
-
+    if (!window.confirm('Are you sure you want to unpair this device?')) return;
+  
     setIsUnpairing(true);
     try {
+      // Optimistic update
+      setPairs(prev => prev.filter(p => 
+        Array.isArray(p.paired_device)
+          ? !p.paired_device.includes(pair.paired_device as string)
+          : p.paired_device !== pair.paired_device
+      ));
+  
       const response = await fetch('https://pp-kcfa.onrender.com/unpair', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
         },
         body: JSON.stringify({
-          device_id: pair.paired_device,
-          email: pair.email
+          device_id: Array.isArray(pair.paired_device) 
+            ? pair.paired_device[0] 
+            : pair.paired_device,
+          email: userEmail
         })
       });
-
+  
+      const responseData = await response.json();
+      
       if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Failed to unpair device');
+        throw new Error(responseData.error || 'Unpair failed. Please try again.');
       }
-
-      onUnpair();
+  
+      // Add delay before refresh
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Force fresh data fetch
+      await onUnpair(); // Not await fetchPairs()
+  
     } catch (error) {
-      console.error('Error unpairing device:', error);
-      alert(error instanceof Error ? error.message : 'Failed to unpair device. Please try again.');
+      console.error('Unpair error:', error);
+      setPairs(prev => [...prev, pair]); // Re-add device on error
     } finally {
       setIsUnpairing(false);
     }
@@ -729,6 +832,14 @@ const DeviceCard: React.FC<DeviceCardProps> = ({ pair, onUnpair , userEmail}) =>
     </>
   )}
 </div>
+<button
+  onClick={handleReverse}
+  className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-colors duration-300"
+  title={pair.reversed === 'yes' ? "Disable Reverse" : "Enable Reverse"}
+>
+  <RefreshCw className={`h-5 w-5 ${pair.reversed === 'yes' ? 'text-blue-600' : ''}`} />
+</button>
+
             <button
               onClick={handleUnpair}
               disabled={isUnpairing}
@@ -762,8 +873,11 @@ const DeviceCard: React.FC<DeviceCardProps> = ({ pair, onUnpair , userEmail}) =>
             </button>
           </div>
           
-        
 
+         
+
+
+      
           <button
   onClick={openScheduleModal} // Updated here
   className="w-full flex items-center justify-center gap-2 text-gray-600 py-3 border-t border-gray-100 hover:text-blue-600 transition-colors duration-300"
